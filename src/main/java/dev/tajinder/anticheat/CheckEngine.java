@@ -39,13 +39,9 @@ public final class CheckEngine implements Listener {
     private final Map<UUID, Integer> violations = new HashMap<>();
     private final Map<UUID, Integer> airTicks = new HashMap<>();
     private final Map<UUID, Long> hoverSince = new HashMap<>();
-    private final Map<UUID, Long> liquidSince = new HashMap<>();
-    private final Map<UUID, Long> noSlowSince = new HashMap<>();
     private final Map<UUID, Integer> speedBuffer = new HashMap<>();
     private final Map<UUID, Integer> hoverBuffer = new HashMap<>();
     private final Map<UUID, Long> lastMoveNanos = new HashMap<>();
-    private final Map<UUID, Integer> liquidWalkBuffer = new HashMap<>();
-    private final Map<UUID, Integer> noSlowBuffer = new HashMap<>();
     private final Map<UUID, Long> lastFlag = new HashMap<>();
     private final Set<UUID> punished = new HashSet<>();
 
@@ -124,25 +120,27 @@ public final class CheckEngine implements Listener {
             flag(player, "Phase", 2, "player bounding box intersected solid blocks");
         }
 
-        if (enabled("movement.jesus") && isOverLiquid(player) && !player.isOnGround()
-                && Math.abs(dy) < 0.015 && player.getVelocity().getY() > -0.05 && !exempt) {
-            int buffer = liquidWalkBuffer.merge(id, 1, Integer::sum);
-            if (buffer >= 8) {
-                flag(player, "Jesus", 2, "sustained movement over liquid");
-                liquidWalkBuffer.put(id, 0);
+        boolean liquidWalk = enabled("movement.jesus") && isOverLiquid(player) && !player.isOnGround()
+                && Math.abs(dy) < 0.015 && player.getVelocity().getY() > -0.05 && !exempt;
+        if (liquidWalk) {
+            long since = liquidSince.computeIfAbsent(id, key -> now);
+            if (now - since >= 900_000_000L) {
+                flag(player, "Jesus", 2, "unsupported movement over liquid persisted for 0.9 seconds");
+                liquidSince.put(id, now);
             }
         } else {
-            liquidWalkBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
+            liquidSince.remove(id);
         }
 
-        if (enabled("movement.noslow") && player.isHandRaised() && horizontal > 0.16 && !exempt) {
-            int buffer = noSlowBuffer.merge(id, 1, Integer::sum);
-            if (buffer >= 12) {
-                flag(player, "NoSlow", 1, "unusually fast movement while using an item");
-                noSlowBuffer.put(id, 0);
+        boolean usingItem = enabled("movement.noslow") && player.isHandRaised() && horizontal > 0.16 && !exempt;
+        if (usingItem) {
+            long since = noSlowSince.computeIfAbsent(id, key -> now);
+            if (now - since >= 1_200_000_000L) {
+                flag(player, "NoSlow", 1, "unusually fast movement while continuously using an item");
+                noSlowSince.put(id, now);
             }
         } else {
-            noSlowBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
+            noSlowSince.remove(id);
         }
     }
 
@@ -266,7 +264,7 @@ public final class CheckEngine implements Listener {
     public void onTeleport(PlayerTeleportEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         airTicks.remove(id); speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id);
-        liquidWalkBuffer.remove(id); noSlowBuffer.remove(id); movementPackets.remove(id);
+        liquidSince.remove(id); noSlowSince.remove(id); hoverSince.remove(id); movementPackets.remove(id);
     }
 
     @EventHandler
@@ -274,7 +272,7 @@ public final class CheckEngine implements Listener {
         UUID id = event.getPlayer().getUniqueId();
         swings.remove(id); placements.remove(id); breaks.remove(id); attacks.remove(id); movementPackets.remove(id);
         recentTargets.remove(id); violations.remove(id); airTicks.remove(id); lastFlag.remove(id); punished.remove(id);
-        speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id); liquidWalkBuffer.remove(id); noSlowBuffer.remove(id);
+        speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id); hoverSince.remove(id); liquidSince.remove(id); noSlowSince.remove(id);
     }
 
     private boolean survival(Player player) {
