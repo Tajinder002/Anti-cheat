@@ -34,6 +34,7 @@ public final class AntiCheatPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         saveDefaultConfig();
         getServer().getPluginManager().registerEvents(this, this);
+        getServer().getPluginManager().registerEvents(new CheckEngine(this), this);
         getLogger().info("AntiCheat loaded. Use /ac to open the control panel.");
     }
 
