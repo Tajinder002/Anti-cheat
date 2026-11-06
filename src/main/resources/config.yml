@@ -1,0 +1,31 @@
+settings:
+  alerts: true
+  debug: false
+  violation-threshold: 10
+  punish-command: "kick %player% Unfair advantage detected"
+
+checks:
+  combat:
+    killaura: true
+    reach: true
+    aim-assist: true
+    autoclicker: true
+    criticals: true
+    velocity: true
+  movement:
+    fly: true
+    speed: true
+    timer: true
+    jesus: true
+    phase: true
+    nofall: true
+    noslow: true
+    scaffold: true
+  world:
+    anti-xray: true
+    mining-analysis: true
+  exploits:
+    packet-flood: true
+    fast-place: true
+    fast-break: true
+    inventory: true
