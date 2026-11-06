@@ -37,6 +37,9 @@ public final class CheckEngine implements Listener {
     private final Map<UUID, Set<UUID>> recentTargets = new HashMap<>();
     private final Map<UUID, Integer> violations = new HashMap<>();
     private final Map<UUID, Integer> airTicks = new HashMap<>();
+    private final Map<UUID, Long> hoverSince = new HashMap<>();
+    private final Map<UUID, Long> liquidSince = new HashMap<>();
+    private final Map<UUID, Long> noSlowSince = new HashMap<>();
     private final Map<UUID, Integer> speedBuffer = new HashMap<>();
     private final Map<UUID, Integer> hoverBuffer = new HashMap<>();
     private final Map<UUID, Long> lastMoveNanos = new HashMap<>();
@@ -59,7 +62,8 @@ public final class CheckEngine implements Listener {
 
         UUID id = player.getUniqueId();
         long now = System.nanoTime();
-        long previous = lastMoveNanos.put(id, now) == null ? 0L : lastMoveNanos.get(id);
+        long previous = lastMoveNanos.getOrDefault(id, 0L);
+        lastMoveNanos.put(id, now);
         double dx = to.getX() - from.getX();
         double dz = to.getZ() - from.getZ();
         double dy = to.getY() - from.getY();
@@ -74,6 +78,7 @@ public final class CheckEngine implements Listener {
         if (horizontal > 1.25 || Math.abs(dy) > 2.0 || (previous != 0L && now - previous > 250_000_000L)) {
             speedBuffer.remove(id);
             hoverBuffer.remove(id);
+            hoverSince.remove(id);
             return;
         }
 
@@ -88,19 +93,21 @@ public final class CheckEngine implements Listener {
         }
 
         if (!exempt && enabled("movement.fly")) {
-            int ticks = player.isOnGround() ? 0 : airTicks.getOrDefault(id, 0) + 1;
-            airTicks.put(id, ticks);
-            boolean hovering = ticks > 50 && Math.abs(dy) < 0.015
+            boolean hovering = !player.isOnGround() && Math.abs(dy) < 0.015
                     && player.getVelocity().getY() > -0.06 && !hasSolidSupport(player);
-            int buffer = hovering ? hoverBuffer.merge(id, 1, Integer::sum) : 0;
-            hoverBuffer.put(id, buffer);
-            if (buffer >= 8) {
-                flag(player, "Fly", 2, "sustained unsupported hovering");
-                hoverBuffer.put(id, 0);
+            if (hovering) {
+                long since = hoverSince.computeIfAbsent(id, key -> now);
+                if (now - since >= 2_500_000_000L) {
+                    flag(player, "Fly", 2, "unsupported hovering persisted for 2.5 seconds");
+                    hoverSince.put(id, now);
+                }
+            } else {
+                hoverSince.remove(id);
             }
         } else {
             airTicks.remove(id);
             hoverBuffer.remove(id);
+            hoverSince.remove(id);
         }
 
         if (enabled("movement.phase") && !player.isInsideVehicle() && isInsideSolidBlock(player)) {
