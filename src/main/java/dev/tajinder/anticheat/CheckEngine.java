@@ -73,6 +73,10 @@ public final class CheckEngine implements Listener {
                 || player.hasPotionEffect(PotionEffectType.LEVITATION)
                 || player.hasPotionEffect(PotionEffectType.SLOW_FALLING);
 
+        // Avoid movement false positives while the server itself is struggling to keep tick time.
+        double[] tpsSamples = Bukkit.getTPS();
+        boolean serverLagging = tpsSamples.length > 0 && tpsSamples[0] < 18.0;
+
         // Large one-off movements and long packet gaps are treated as lag/teleport corrections.
         if (horizontal > 1.25 || Math.abs(dy) > 2.0 || (previous != 0L && now - previous > 250_000_000L)) {
             speedBuffer.remove(id);
@@ -81,7 +85,7 @@ public final class CheckEngine implements Listener {
             return;
         }
 
-        if (!exempt && enabled("movement.timer")) {
+        if (!exempt && !serverLagging && enabled("movement.timer")) {
             Deque<Long> moves = window(movementPackets, id, 1000);
             moves.addLast(System.currentTimeMillis());
             if (moves.size() > 36) {
@@ -90,7 +94,7 @@ public final class CheckEngine implements Listener {
             }
         }
 
-        if (!exempt && enabled("movement.speed") && horizontal > speedLimit(player)) {
+        if (!exempt && !serverLagging && enabled("movement.speed") && horizontal > speedLimit(player)) {
             int buffer = speedBuffer.merge(id, 1, Integer::sum);
             if (buffer >= 4) {
                 flag(player, "Speed", 1, "repeated high horizontal movement");
@@ -100,7 +104,7 @@ public final class CheckEngine implements Listener {
             speedBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
         }
 
-        if (!exempt && enabled("movement.fly")) {
+        if (!exempt && !serverLagging && enabled("movement.fly")) {
             boolean hovering = !player.isOnGround() && Math.abs(dy) < 0.015
                     && player.getVelocity().getY() > -0.06 && !hasSolidSupport(player);
             if (hovering) {
@@ -123,7 +127,7 @@ public final class CheckEngine implements Listener {
         }
 
         boolean liquidWalk = enabled("movement.jesus") && isOverLiquid(player) && !player.isOnGround()
-                && Math.abs(dy) < 0.015 && player.getVelocity().getY() > -0.05 && !exempt;
+                && Math.abs(dy) < 0.015 && player.getVelocity().getY() > -0.05 && !exempt && !serverLagging;
         if (liquidWalk) {
             long since = liquidSince.computeIfAbsent(id, key -> now);
             if (now - since >= 900_000_000L) {
@@ -134,7 +138,7 @@ public final class CheckEngine implements Listener {
             liquidSince.remove(id);
         }
 
-        boolean usingItem = enabled("movement.noslow") && player.isHandRaised() && horizontal > 0.16 && !exempt;
+        boolean usingItem = enabled("movement.noslow") && player.isHandRaised() && horizontal > 0.16 && !exempt && !serverLagging;
         if (usingItem) {
             long since = noSlowSince.computeIfAbsent(id, key -> now);
             if (now - since >= 1_200_000_000L) {
