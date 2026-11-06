@@ -1,0 +1,18 @@
+name: AntiCheat
+version: '${version}'
+main: dev.tajinder.anticheat.AntiCheatPlugin
+api-version: '1.21.11'
+author: Tajinder002
+description: Configurable server-side anti-cheat with an in-game control GUI.
+commands:
+  ac:
+    description: Open and manage the AntiCheat control panel.
+    usage: /ac [checks|reload|player <name>]
+    aliases: [anticheat]
+permissions:
+  anticheat.admin:
+    description: Access the AntiCheat control panel and settings.
+    default: op
+  anticheat.alerts:
+    description: Receive AntiCheat staff alerts.
+    default: op
