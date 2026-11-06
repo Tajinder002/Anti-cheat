@@ -34,6 +34,7 @@ public final class CheckEngine implements Listener {
     private final Map<UUID, Deque<Long>> placements = new HashMap<>();
     private final Map<UUID, Deque<Long>> breaks = new HashMap<>();
     private final Map<UUID, Deque<Long>> attacks = new HashMap<>();
+    private final Map<UUID, Deque<Long>> movementPackets = new HashMap<>();
     private final Map<UUID, Set<UUID>> recentTargets = new HashMap<>();
     private final Map<UUID, Integer> violations = new HashMap<>();
     private final Map<UUID, Integer> airTicks = new HashMap<>();
@@ -80,6 +81,15 @@ public final class CheckEngine implements Listener {
             hoverBuffer.remove(id);
             hoverSince.remove(id);
             return;
+        }
+
+        if (!exempt && enabled("movement.timer")) {
+            Deque<Long> moves = window(movementPackets, id, 1000);
+            moves.addLast(System.currentTimeMillis());
+            if (moves.size() > 36) {
+                flag(player, "Timer suspicion", 1, "more than 36 position updates in one second");
+                moves.clear();
+            }
         }
 
         if (!exempt && enabled("movement.speed") && horizontal > speedLimit(player)) {
@@ -256,13 +266,13 @@ public final class CheckEngine implements Listener {
     public void onTeleport(PlayerTeleportEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         airTicks.remove(id); speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id);
-        liquidWalkBuffer.remove(id); noSlowBuffer.remove(id);
+        liquidWalkBuffer.remove(id); noSlowBuffer.remove(id); movementPackets.remove(id);
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();
-        swings.remove(id); placements.remove(id); breaks.remove(id); attacks.remove(id);
+        swings.remove(id); placements.remove(id); breaks.remove(id); attacks.remove(id); movementPackets.remove(id);
         recentTargets.remove(id); violations.remove(id); airTicks.remove(id); lastFlag.remove(id); punished.remove(id);
         speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id); liquidWalkBuffer.remove(id); noSlowBuffer.remove(id);
     }
