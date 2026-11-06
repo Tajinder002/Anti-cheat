@@ -6,6 +6,9 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -34,6 +37,11 @@ public final class CheckEngine implements Listener {
     private final Map<UUID, Set<UUID>> recentTargets = new HashMap<>();
     private final Map<UUID, Integer> violations = new HashMap<>();
     private final Map<UUID, Integer> airTicks = new HashMap<>();
+    private final Map<UUID, Integer> speedBuffer = new HashMap<>();
+    private final Map<UUID, Integer> hoverBuffer = new HashMap<>();
+    private final Map<UUID, Long> lastMoveNanos = new HashMap<>();
+    private final Map<UUID, Integer> liquidWalkBuffer = new HashMap<>();
+    private final Map<UUID, Integer> noSlowBuffer = new HashMap<>();
     private final Map<UUID, Long> lastFlag = new HashMap<>();
     private final Set<UUID> punished = new HashSet<>();
 
@@ -44,37 +52,132 @@ public final class CheckEngine implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        if (!survival(player) || event.getTo() == null) return;
         Location from = event.getFrom();
         Location to = event.getTo();
-        if (from.getWorld() != to.getWorld()) return;
+        if (to == null || !survival(player) || from.getWorld() != to.getWorld()) return;
+        if (from.getX() == to.getX() && from.getY() == to.getY() && from.getZ() == to.getZ()) return;
 
+        UUID id = player.getUniqueId();
+        long now = System.nanoTime();
+        long previous = lastMoveNanos.put(id, now) == null ? 0L : lastMoveNanos.get(id);
         double dx = to.getX() - from.getX();
         double dz = to.getZ() - from.getZ();
+        double dy = to.getY() - from.getY();
         double horizontal = Math.hypot(dx, dz);
         boolean exempt = player.isFlying() || player.getAllowFlight() || player.isGliding()
-                || player.isInsideVehicle() || player.isSwimming()
-                || player.isInWater() || player.isClimbing() || player.isRiptiding();
+                || player.isInsideVehicle() || player.isSwimming() || player.isInWater()
+                || player.isClimbing() || player.isRiptiding()
+                || player.hasPotionEffect(PotionEffectType.LEVITATION)
+                || player.hasPotionEffect(PotionEffectType.SLOW_FALLING);
 
-        if (!exempt && enabled("movement.speed") && horizontal > 0.82 && player.isOnGround()) {
-            flag(player, "Speed", 1, "horizontal movement " + round(horizontal));
+        // Large one-off movements and long packet gaps are treated as lag/teleport corrections.
+        if (horizontal > 1.25 || Math.abs(dy) > 2.0 || (previous != 0L && now - previous > 250_000_000L)) {
+            speedBuffer.remove(id);
+            hoverBuffer.remove(id);
+            return;
+        }
+
+        if (!exempt && enabled("movement.speed") && horizontal > speedLimit(player)) {
+            int buffer = speedBuffer.merge(id, 1, Integer::sum);
+            if (buffer >= 4) {
+                flag(player, "Speed", 1, "repeated high horizontal movement");
+                speedBuffer.put(id, 0);
+            }
+        } else {
+            speedBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
         }
 
         if (!exempt && enabled("movement.fly")) {
-            int ticks = player.isOnGround() ? 0 : airTicks.getOrDefault(player.getUniqueId(), 0) + 1;
-            airTicks.put(player.getUniqueId(), ticks);
-            if (ticks > 45 && player.getVelocity().getY() > -0.08 && Math.abs(to.getY() - from.getY()) < 0.03) {
-                flag(player, "Fly", 1, "extended unsupported airtime");
+            int ticks = player.isOnGround() ? 0 : airTicks.getOrDefault(id, 0) + 1;
+            airTicks.put(id, ticks);
+            boolean hovering = ticks > 50 && Math.abs(dy) < 0.015
+                    && player.getVelocity().getY() > -0.06 && !hasSolidSupport(player);
+            int buffer = hovering ? hoverBuffer.merge(id, 1, Integer::sum) : 0;
+            hoverBuffer.put(id, buffer);
+            if (buffer >= 8) {
+                flag(player, "Fly", 2, "sustained unsupported hovering");
+                hoverBuffer.put(id, 0);
             }
         } else {
-            airTicks.remove(player.getUniqueId());
+            airTicks.remove(id);
+            hoverBuffer.remove(id);
         }
 
-        if (enabled("movement.phase") && !player.isInsideVehicle()
-                && player.getBoundingBox().overlaps(to.clone().add(0, 0.15, 0).getBlock().getBoundingBox())
-                && to.getBlock().getType().isSolid()) {
-            flag(player, "Phase", 2, "player moved into a solid block");
+        if (enabled("movement.phase") && !player.isInsideVehicle() && isInsideSolidBlock(player)) {
+            flag(player, "Phase", 2, "player bounding box intersected solid blocks");
         }
+
+        if (enabled("movement.jesus") && isOverLiquid(player) && !player.isOnGround()
+                && Math.abs(dy) < 0.015 && player.getVelocity().getY() > -0.05 && !exempt) {
+            int buffer = liquidWalkBuffer.merge(id, 1, Integer::sum);
+            if (buffer >= 8) {
+                flag(player, "Jesus", 2, "sustained movement over liquid");
+                liquidWalkBuffer.put(id, 0);
+            }
+        } else {
+            liquidWalkBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
+        }
+
+        if (enabled("movement.noslow") && player.isHandRaised() && horizontal > 0.16 && !exempt) {
+            int buffer = noSlowBuffer.merge(id, 1, Integer::sum);
+            if (buffer >= 12) {
+                flag(player, "NoSlow", 1, "unusually fast movement while using an item");
+                noSlowBuffer.put(id, 0);
+            }
+        } else {
+            noSlowBuffer.computeIfPresent(id, (key, value) -> Math.max(0, value - 1));
+        }
+    }
+
+    @EventHandler
+    public void onFallDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player) || event.getCause() != EntityDamageEvent.DamageCause.FALL) return;
+        if (enabled("movement.nofall") && survival(player) && player.getFallDistance() >= 6.0f
+                && event.getDamage() <= 0.0) {
+            flag(player, "NoFall suspicion", 1, "long fall produced no damage");
+        }
+    }
+
+    @EventHandler
+    public void onFlightToggle(PlayerToggleFlightEvent event) {
+        Player player = event.getPlayer();
+        if (event.isFlying() && enabled("movement.fly") && survival(player) && !player.getAllowFlight()) {
+            flag(player, "Fly", 2, "flight toggle without permission");
+        }
+    }
+
+    private double speedLimit(Player player) {
+        double limit = player.isSprinting() ? 0.38 : 0.30;
+        limit *= Math.max(0.5, player.getWalkSpeed() / 0.2);
+        if (player.hasPotionEffect(PotionEffectType.SPEED)) {
+            limit *= 1.0 + 0.20 * (player.getPotionEffect(PotionEffectType.SPEED).getAmplifier() + 1);
+        }
+        return limit + 0.08;
+    }
+
+    private boolean hasSolidSupport(Player player) {
+        return player.getLocation().clone().subtract(0, 0.12, 0).getBlock().getType().isSolid();
+    }
+
+    private boolean isInsideSolidBlock(Player player) {
+        BoundingBox box = player.getBoundingBox();
+        int minX = (int) Math.floor(box.getMinX() + 0.001);
+        int maxX = (int) Math.floor(box.getMaxX() - 0.001);
+        int minY = (int) Math.floor(box.getMinY() + 0.05);
+        int maxY = (int) Math.floor(box.getMaxY() - 0.05);
+        int minZ = (int) Math.floor(box.getMinZ() + 0.001);
+        int maxZ = (int) Math.floor(box.getMaxZ() - 0.001);
+        for (int x = minX; x <= maxX; x++) for (int y = minY; y <= maxY; y++)
+            for (int z = minZ; z <= maxZ; z++) {
+                Material type = player.getWorld().getBlockAt(x, y, z).getType();
+                if (type.isSolid() && type.isOccluding()) return true;
+            }
+        return false;
+    }
+
+    private boolean isOverLiquid(Player player) {
+        Material below = player.getLocation().clone().subtract(0, 0.08, 0).getBlock().getType();
+        return below == Material.WATER || below == Material.LAVA;
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -144,7 +247,9 @@ public final class CheckEngine implements Listener {
 
     @EventHandler
     public void onTeleport(PlayerTeleportEvent event) {
-        airTicks.remove(event.getPlayer().getUniqueId());
+        UUID id = event.getPlayer().getUniqueId();
+        airTicks.remove(id); speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id);
+        liquidWalkBuffer.remove(id); noSlowBuffer.remove(id);
     }
 
     @EventHandler
@@ -152,6 +257,7 @@ public final class CheckEngine implements Listener {
         UUID id = event.getPlayer().getUniqueId();
         swings.remove(id); placements.remove(id); breaks.remove(id); attacks.remove(id);
         recentTargets.remove(id); violations.remove(id); airTicks.remove(id); lastFlag.remove(id); punished.remove(id);
+        speedBuffer.remove(id); hoverBuffer.remove(id); lastMoveNanos.remove(id); liquidWalkBuffer.remove(id); noSlowBuffer.remove(id);
     }
 
     private boolean survival(Player player) {
