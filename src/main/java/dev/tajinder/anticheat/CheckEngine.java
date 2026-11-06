@@ -39,6 +39,8 @@ public final class CheckEngine implements Listener {
     private final Map<UUID, Integer> violations = new HashMap<>();
     private final Map<UUID, Integer> airTicks = new HashMap<>();
     private final Map<UUID, Long> hoverSince = new HashMap<>();
+    private final Map<UUID, Long> liquidSince = new HashMap<>();
+    private final Map<UUID, Long> noSlowSince = new HashMap<>();
     private final Map<UUID, Integer> speedBuffer = new HashMap<>();
     private final Map<UUID, Integer> hoverBuffer = new HashMap<>();
     private final Map<UUID, Long> lastMoveNanos = new HashMap<>();
