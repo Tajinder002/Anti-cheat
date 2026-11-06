@@ -7,7 +7,7 @@ description: Configurable server-side anti-cheat with an in-game control GUI.
 commands:
   ac:
     description: Open and manage the AntiCheat control panel.
-    usage: /ac [checks|reload|player <name>]
+    usage: /ac [checks|reload|threshold <number>|player <name>]
     aliases: [anticheat]
 permissions:
   anticheat.admin:
